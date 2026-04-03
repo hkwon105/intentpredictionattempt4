@@ -96,6 +96,7 @@ class WebcamCamera:
         self.cap.set(cv2.CAP_PROP_FPS, 60)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def read(self):
         return self.cap.read()
@@ -132,6 +133,7 @@ class InferenceEngine:
         self.frame_buffer.append(t)
         if len(self.frame_buffer) == self.sample_dur:
             self._infer()
+            self.frame_buffer.clear()
 
     def _infer(self):
         clip = torch.stack(list(self.frame_buffer))
