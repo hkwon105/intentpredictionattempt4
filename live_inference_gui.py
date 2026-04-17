@@ -115,9 +115,8 @@ class InferenceEngine:
         self.smooth_win   = args.smoothing_window
         self.device       = device
 
-        # Use a true sliding window for RAW frames
-        self.raw_frame_buffer = collections.deque(maxlen=self.sample_dur)
-        self.pred_history     = collections.deque(maxlen=self.smooth_win)
+        self.frame_buffer = collections.deque(maxlen=self.sample_dur)
+        self.pred_history = collections.deque(maxlen=self.smooth_win)
 
         self.lock             = threading.Lock()
         self.latest_probs     = np.zeros(len(class_labels))
@@ -126,39 +125,18 @@ class InferenceEngine:
         self.stop_signal      = False
         self.fps              = 0.0
         self._last_infer_time = time.time()
-        self.running          = True
-
-        # Start a dedicated background thread for inference
-        self.infer_thread = threading.Thread(target=self._inference_loop, daemon=True)
-        self.infer_thread.start()
 
     def push_frame(self, bgr_frame):
-        # Extremely fast: just append to the sliding window. 
-        # No blocking, no clearing! The deque handles maxlen automatically.
-        self.raw_frame_buffer.append(bgr_frame)
+        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        pil = Image.fromarray(rgb)
+        t   = self.transform(pil)
+        self.frame_buffer.append(t)
+        if len(self.frame_buffer) == self.sample_dur:
+            self._infer()
+            self.frame_buffer.clear()
 
-    def _inference_loop(self):
-        while self.running:
-            # Wait until we have a full window of frames to start predicting
-            if len(self.raw_frame_buffer) < self.sample_dur:
-                time.sleep(0.01)
-                continue
-
-            # 1. Take a snapshot of the latest frames (prevents camera thread blocking)
-            frames = list(self.raw_frame_buffer)
-
-            # 2. Process transformations in the background
-            t_frames = []
-            for f in frames:
-                rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-                pil = Image.fromarray(rgb)
-                t_frames.append(self.transform(pil))
-
-            # 3. Run Inference
-            self._infer(t_frames)
-
-    def _infer(self, t_frames):
-        clip = torch.stack(t_frames)
+    def _infer(self):
+        clip = torch.stack(list(self.frame_buffer))
         clip = clip.unsqueeze(0).to(self.device)
 
         with torch.no_grad():
@@ -180,11 +158,9 @@ class InferenceEngine:
         stop  = (label == "INTERACTION") and (conf >= self.conf_thresh)
 
         now  = time.time()
-        # Calculate inference loop speed
         fps  = 1.0 / max(now - self._last_infer_time, 1e-6)
         self._last_infer_time = now
 
-        # Update state thread-safely for the GUI to read
         with self.lock:
             self.latest_probs = probs
             self.latest_label = label
